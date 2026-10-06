@@ -1,0 +1,40 @@
+# virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+
+# local config files
+configs/dataset_paths.yaml
+
+# data directories
+data/
+raw_data/
+processed_data/
+
+# large EEG / data files
+*.fif
+*.edf
+*.bdf
+*.set
+*.vhdr
+*.eeg
+*.mat
+*.h5
+*.npy
+*.npz
+*.pkl
+
+# outputs
+results/
+figures/
+models/
+checkpoints/

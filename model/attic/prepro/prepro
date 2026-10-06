@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""
+Build ML-ready EEG datasets from EEGLAB .set/.fdt outputs + *_Tab.csv.
+
+Input per subject:
+  - <subject>_10_remove_components_2_<suffix>.set
+  - matching .fdt in the same folder
+  - <subject>_Tab.csv
+
+Output:
+  - per-subject .npz: X = trials x channels x timepoints, y = labels
+  - per-subject metadata .csv
+  - aggregated .npz across subjects
+  - aggregated metadata/log .csv with subject_id preserved
+
+Example:
+  python build_eeg_ml_dataset.py \
+    --root /path/to/Study2 \
+    --subjects S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 \
+    --condition C \
+    --label Place \
+    --out-dir ./ml_ready
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Iterable
+
+import mne
+import numpy as np
+import pandas as pd
+
+
+CONDITION_INFO = {
+    "C": {
+        "folder": "Control",
+        "suffix": "c",
+        "description": "control / no TMS",
+    },
+    "L": {
+        "folder": "TMS_on_Lip_Target",
+        "suffix": "tl",
+        "description": "TMS on lip target",
+    },
+    "T": {
+        "folder": "TMS_on_Tongue_Target",
+        "suffix": "tt",
+        "description": "TMS on tongue target",
+    },
+}
+
+
+DEFAULT_LABEL_COLUMNS = [
+    "Phoneme1",
+    "Phoneme2",
+    "Phoneme3",
+    "Place",
+    "Manner",
+    "Voicing",
+    "Category",
+    "Correct_Key",
+    "Stimulus",
+    "Task",
+    "TMS",
+    "TMSTarget",
+    "TrialN",
+]
+
+
+def normalize_string_series(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.strip().str.lower()
+
+
+def find_subject_dirs(root: Path) -> list[Path]:
+    """Find folders like P01, P02, S01, S02."""
+    folders = []
+    for p in root.iterdir():
+        if p.is_dir() and re.fullmatch(r"[PS]\d{2}", p.name):
+            folders.append(p)
+    return sorted(folders, key=lambda x: x.name)
+
+
+def find_final_set(subject_dir: Path, subject: str, condition: str) -> Path:
+    """Find final cleaned EEGLAB .set file for one subject/condition."""
+    info = CONDITION_INFO[condition]
+    condition_dir = subject_dir / info["folder"]
+    suffix = info["suffix"]
+
+    if not condition_dir.exists():
+        raise FileNotFoundError(f"Condition folder not found: {condition_dir}")
+
+    patterns = [
+        f"{subject}_10*components*_{suffix}.set",
+        f"{subject}_10*component*_{suffix}.set",
+        f"*10*components*_{suffix}.set",
+        f"*10*component*_{suffix}.set",
+    ]
+
+    candidates: list[Path] = []
+    for pat in patterns:
+        candidates.extend(sorted(condition_dir.glob(pat)))
+
+    candidates = sorted(set(candidates))
+    if not candidates:
+        raise FileNotFoundError(
+            f"Could not find final cleaned .set file in {condition_dir}. "
+            f"Expected something like {subject}_10_remove_components_2_{suffix}.set"
+        )
+
+    # If multiple files match, prefer the shortest name, then lexicographic order.
+    return sorted(candidates, key=lambda p: (len(p.name), p.name))[0]
+
+
+def find_tab_file(subject_dir: Path, subject: str) -> Path:
+    tab = subject_dir / f"{subject}_Tab.csv"
+    if not tab.exists():
+        candidates = sorted(subject_dir.glob("*_Tab.csv"))
+        if not candidates:
+            raise FileNotFoundError(f"No *_Tab.csv found in {subject_dir}")
+        return candidates[0]
+    return tab
+
+
+def find_report_file(subject_dir: Path, subject: str, condition: str) -> Path | None:
+    info = CONDITION_INFO[condition]
+    condition_dir = subject_dir / info["folder"]
+    suffix = info["suffix"]
+
+    candidates = [
+        condition_dir / f"{subject}_report_{suffix}.txt",
+        subject_dir / f"{subject}_report_{suffix}.txt",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+
+    # Loose fallback.
+    loose = sorted(condition_dir.glob(f"*report*_{suffix}.txt"))
+    if loose:
+        return loose[0]
+
+    return None
+
+
+def parse_bad_trial_line(text: str, label: str) -> list[int]:
+    """
+    Parse one report line.
+
+    Example report line:
+      Removed trials in the first inspection: 3 7 10
+      Removed trials in the second inspection: [2 5]
+      Removed trials in the first inspection: None
+    """
+    pattern = rf"{re.escape(label)}\s*:\s*(.*)"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if match is None:
+        return []
+
+    line = match.group(1).splitlines()[0]
+    if "none" in line.lower() or line.strip() == "":
+        return []
+
+    return [int(x) for x in re.findall(r"\d+", line)]
+
+
+def parse_bad_trials_from_report(report_file: Path | None) -> tuple[list[int], list[int]]:
+    """
+    Return 1-based MATLAB-style bad trial indices from the first and second inspections.
+
+    Important:
+      - first inspection indices refer to the original epoched trial list
+      - second inspection indices refer to the already reduced trial list
+    """
+    if report_file is None or not report_file.exists():
+        return [], []
+
+    text = report_file.read_text(errors="ignore")
+    bad1 = parse_bad_trial_line(text, "Removed trials in the first inspection")
+    bad2 = parse_bad_trial_line(text, "Removed trials in the second inspection")
+    return bad1, bad2
+
+
+def drop_matlab_indices_sequential(df: pd.DataFrame, bad1: Iterable[int], bad2: Iterable[int]) -> pd.DataFrame:
+    """
+    Drop 1-based trial indices using the same sequential logic as the MATLAB workflow.
+
+    First bad-trial removal happens before the first ICA.
+    Second bad-trial removal happens after that, so its indices refer to the reduced data.
+    """
+    out = df.reset_index(drop=True).copy()
+
+    for bad in [bad1, bad2]:
+        bad_zero_based = sorted({i - 1 for i in bad if i >= 1}, reverse=True)
+        keep_mask = np.ones(len(out), dtype=bool)
+
+        for idx in bad_zero_based:
+            if 0 <= idx < len(out):
+                keep_mask[idx] = False
+
+        out = out.loc[keep_mask].reset_index(drop=True)
+
+    return out
+
+
+def filter_tab_for_condition(tab: pd.DataFrame, condition: str, task: str = "phonemes") -> pd.DataFrame:
+    """
+    Match the trial table to the condition folder.
+
+    C: TMS == 0
+    L: TMS == 1 and TMSTarget contains 'lip'
+    T: TMS == 1 and TMSTarget contains 'tongue'
+    """
+    df = tab.copy()
+    df["orig_csv_index"] = np.arange(len(df))
+
+    if task and "Task" in df.columns:
+        df = df[normalize_string_series(df["Task"]) == task.lower()].copy()
+
+    if "TMS" not in df.columns:
+        raise ValueError("The trial table must contain a 'TMS' column.")
+
+    tms = pd.to_numeric(df["TMS"], errors="coerce").fillna(-1).astype(int)
+
+    if condition == "C":
+        df = df[tms == 0].copy()
+
+    elif condition in {"L", "T"}:
+        if "TMSTarget" not in df.columns:
+            raise ValueError("The trial table must contain 'TMSTarget' for TMS conditions.")
+
+        target = normalize_string_series(df["TMSTarget"])
+        target_keyword = "lip" if condition == "L" else "tongue"
+        df = df[(tms == 1) & target.str.contains(target_keyword, na=False)].copy()
+
+    else:
+        raise ValueError(f"Unsupported condition: {condition}")
+
+    return df.reset_index(drop=True)
+
+
+def read_eeglab_epochs(set_file: Path):
+    """
+    Read final EEGLAB epoched .set/.fdt.
+
+    .fdt is not passed directly. MNE reads it through the .set file.
+    """
+    if not set_file.exists():
+        raise FileNotFoundError(set_file)
+
+    fdt_file = set_file.with_suffix(".fdt")
+    if not fdt_file.exists():
+        raise FileNotFoundError(
+            f"Matching .fdt file not found for {set_file.name}. "
+            f"Expected: {fdt_file}"
+        )
+
+    epochs = mne.io.read_epochs_eeglab(str(set_file), verbose="ERROR")
+    return epochs
+
+
+def make_subject_arrays(
+    subject_dir: Path,
+    condition: str,
+    label_col: str,
+    out_dir: Path,
+    task: str = "phonemes",
+    use_report: bool = True,
+    strict: bool = True,
+) -> dict:
+    subject = subject_dir.name
+
+    set_file = find_final_set(subject_dir, subject, condition)
+    tab_file = find_tab_file(subject_dir, subject)
+    report_file = find_report_file(subject_dir, subject, condition) if use_report else None
+
+    print(f"\n[{subject}]")
+    print(f"  set:    {set_file}")
+    print(f"  tab:    {tab_file}")
+    print(f"  report: {report_file if report_file else 'not found / not used'}")
+
+    epochs = read_eeglab_epochs(set_file)
+    X = epochs.get_data(copy=True)  # shape: trials x channels x timepoints
+    n_epochs, n_channels, n_times = X.shape
+
+    tab = pd.read_csv(tab_file)
+    cond_tab = filter_tab_for_condition(tab, condition=condition, task=task)
+
+    bad1, bad2 = parse_bad_trials_from_report(report_file)
+    aligned_tab = drop_matlab_indices_sequential(cond_tab, bad1, bad2)
+
+    if len(aligned_tab) != n_epochs:
+        message = (
+            f"[{subject}] Trial count mismatch after label alignment:\n"
+            f"  epochs in .set: {n_epochs}\n"
+            f"  rows in filtered Tab.csv before report drops: {len(cond_tab)}\n"
+            f"  rows after report drops: {len(aligned_tab)}\n"
+            f"  bad1={bad1}, bad2={bad2}\n"
+            f"This means the final .set and Tab.csv/report are not aligned yet."
+        )
+        if strict:
+            raise ValueError(message)
+        else:
+            print("WARNING:", message)
+            min_n = min(n_epochs, len(aligned_tab))
+            X = X[:min_n]
+            aligned_tab = aligned_tab.iloc[:min_n].reset_index(drop=True)
+            n_epochs = min_n
+
+    if label_col not in aligned_tab.columns:
+        raise ValueError(
+            f"Label column '{label_col}' not found in {tab_file}. "
+            f"Available columns: {list(aligned_tab.columns)}"
+        )
+
+    y = aligned_tab[label_col].astype(str).to_numpy()
+
+    # Per-trial log. This preserves the subject dimension after concatenation.
+    log = pd.DataFrame({
+        "subject": subject,
+        "condition": condition,
+        "condition_description": CONDITION_INFO[condition]["description"],
+        "subject_trial_index": np.arange(n_epochs),
+        "orig_csv_index": aligned_tab["orig_csv_index"].to_numpy(),
+        "label_name": label_col,
+        "label": y,
+        "set_file": str(set_file),
+        "tab_file": str(tab_file),
+        "report_file": str(report_file) if report_file else "",
+    })
+
+    # Add useful trial metadata if present.
+    for col in DEFAULT_LABEL_COLUMNS:
+        if col in aligned_tab.columns and col not in log.columns:
+            log[col] = aligned_tab[col].to_numpy()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_label = re.sub(r"[^A-Za-z0-9_]+", "_", label_col)
+    npz_path = out_dir / f"{subject}_{condition}_{safe_label}.npz"
+    log_path = out_dir / f"{subject}_{condition}_{safe_label}.metadata.csv"
+
+    np.savez_compressed(
+        npz_path,
+        X=X,
+        y=y,
+        subject=np.array([subject] * n_epochs),
+        condition=np.array([condition] * n_epochs),
+        orig_csv_index=aligned_tab["orig_csv_index"].to_numpy(),
+        ch_names=np.array(epochs.ch_names),
+        times=epochs.times,
+        sfreq=np.array([epochs.info["sfreq"]]),
+        label_name=np.array([label_col]),
+        set_file=np.array([str(set_file)]),
+        tab_file=np.array([str(tab_file)]),
+        report_file=np.array([str(report_file) if report_file else ""]),
+    )
+    log.to_csv(log_path, index=False)
+
+    print(f"  X shape: {X.shape}")
+    print(f"  y shape: {y.shape}")
+    print(f"  saved:   {npz_path}")
+    print(f"  log:     {log_path}")
+
+    return {
+        "subject": subject,
+        "X": X,
+        "y": y,
+        "log": log,
+        "ch_names": epochs.ch_names,
+        "times": epochs.times,
+        "sfreq": epochs.info["sfreq"],
+        "npz_path": npz_path,
+        "log_path": log_path,
+    }
+
+
+def build_aggregate(
+    subject_results: list[dict],
+    out_dir: Path,
+    dataset_name: str,
+    condition: str,
+    label_col: str,
+):
+    if not subject_results:
+        raise ValueError("No subject results to aggregate.")
+
+    # Check channels/time dimensions before concatenating.
+    ref_ch = subject_results[0]["ch_names"]
+    ref_times = subject_results[0]["times"]
+    ref_sfreq = subject_results[0]["sfreq"]
+
+    for r in subject_results:
+        if r["ch_names"] != ref_ch:
+            raise ValueError(f"Channel mismatch in subject {r['subject']}")
+        if len(r["times"]) != len(ref_times) or not np.allclose(r["times"], ref_times):
+            raise ValueError(f"Time axis mismatch in subject {r['subject']}")
+        if not np.isclose(r["sfreq"], ref_sfreq):
+            raise ValueError(f"Sampling rate mismatch in subject {r['subject']}")
+
+    X_all = np.concatenate([r["X"] for r in subject_results], axis=0)
+    y_all = np.concatenate([r["y"] for r in subject_results], axis=0)
+
+    log_all = pd.concat([r["log"] for r in subject_results], ignore_index=True)
+    log_all.insert(0, "global_trial_index", np.arange(len(log_all)))
+
+    subjects_all = log_all["subject"].to_numpy()
+    conditions_all = log_all["condition"].to_numpy()
+
+    safe_label = re.sub(r"[^A-Za-z0-9_]+", "_", label_col)
+    out_npz = out_dir / f"{dataset_name}_{condition}_{safe_label}_ALL.npz"
+    out_log = out_dir / f"{dataset_name}_{condition}_{safe_label}_ALL.metadata.csv"
+    out_summary = out_dir / f"{dataset_name}_{condition}_{safe_label}_ALL.summary.json"
+
+    np.savez_compressed(
+        out_npz,
+        X=X_all,
+        y=y_all,
+        subject=subjects_all,
+        condition=conditions_all,
+        ch_names=np.array(ref_ch),
+        times=ref_times,
+        sfreq=np.array([ref_sfreq]),
+        label_name=np.array([label_col]),
+    )
+    log_all.to_csv(out_log, index=False)
+
+    summary = {
+        "dataset_name": dataset_name,
+        "condition": condition,
+        "label": label_col,
+        "X_shape": list(X_all.shape),
+        "y_shape": list(y_all.shape),
+        "n_subjects": int(log_all["subject"].nunique()),
+        "subjects": sorted(log_all["subject"].unique().tolist()),
+        "n_trials_per_subject": log_all.groupby("subject").size().to_dict(),
+        "label_counts": log_all["label"].value_counts().to_dict(),
+        "sfreq": float(ref_sfreq),
+        "n_channels": int(X_all.shape[1]),
+        "n_times": int(X_all.shape[2]),
+    }
+    out_summary.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+
+    print("\n[AGGREGATED]")
+    print(f"  X_all shape: {X_all.shape}")
+    print(f"  y_all shape: {y_all.shape}")
+    print(f"  saved:       {out_npz}")
+    print(f"  metadata:    {out_log}")
+    print(f"  summary:     {out_summary}")
+
+    return out_npz, out_log, out_summary
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", required=True, type=Path, help="Folder containing P01...P08 or S01...S16 subject folders.")
+    parser.add_argument("--subjects", nargs="*", default=None, help="Subjects to process, e.g. S01 S02 ... S16. If omitted, auto-detects P??/S?? folders.")
+    parser.add_argument("--condition", choices=["C", "L", "T"], default="C", help="C=Control, L=TMS lip, T=TMS tongue.")
+    parser.add_argument("--label", default="Place", help="Column name in *_Tab.csv to use as y label. Examples: Place, Voicing, Phoneme1, Category.")
+    parser.add_argument("--task", default="phonemes", help="Task filter in Tab.csv. Use empty string '' to disable.")
+    parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument("--dataset-name", default=None, help="Name for the aggregated output file, e.g. Study1_2019 or Study2_2021.")
+    parser.add_argument("--no-report", action="store_true", help="Do not parse *_report_*.txt for removed trials.")
+    parser.add_argument("--non-strict", action="store_true", help="If label/epoch counts mismatch, truncate to min length instead of raising an error.")
+
+    args = parser.parse_args()
+
+    root = args.root.expanduser().resolve()
+    out_dir = args.out_dir.expanduser().resolve()
+
+    if args.subjects:
+        subject_dirs = [root / s for s in args.subjects]
+    else:
+        subject_dirs = find_subject_dirs(root)
+
+    subject_dirs = [p for p in subject_dirs if p.exists() and p.is_dir()]
+    if not subject_dirs:
+        raise FileNotFoundError(f"No subject folders found under {root}")
+
+    dataset_name = args.dataset_name or root.name
+
+    results = []
+    for subject_dir in subject_dirs:
+        result = make_subject_arrays(
+            subject_dir=subject_dir,
+            condition=args.condition,
+            label_col=args.label,
+            out_dir=out_dir / "per_subject",
+            task=args.task,
+            use_report=not args.no_report,
+            strict=not args.non_strict,
+        )
+        results.append(result)
+
+    build_aggregate(
+        subject_results=results,
+        out_dir=out_dir,
+        dataset_name=dataset_name,
+        condition=args.condition,
+        label_col=args.label,
+    )
+
+
+if __name__ == "__main__":
+    main()

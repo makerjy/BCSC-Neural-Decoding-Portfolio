@@ -1,0 +1,93 @@
+FACTORIAL | space{raw,car,csd} x window{full,late} x rep{riem,proto}
+32 jobs | 12 configs | seeds 3 | + permutation control
+
+  [ 1/32] S01 place best=0.700 ('car', 'late', 'riem') | permMax=0.625  1042s
+  [ 2/32] S04 place best=0.775 ('raw', 'full', 'riem') | permMax=0.562  1044s
+  [ 3/32] S11 place best=0.700 ('car', 'full', 'riem') | permMax=0.550  1091s
+  [ 4/32] S12 place best=0.802 ('raw', 'late', 'riem') | permMax=0.484  1174s
+  [ 5/32] S16 place best=0.696 ('car', 'full', 'riem') | permMax=0.562  1213s
+  [ 6/32] S13 place best=0.672 ('csd', 'late', 'riem') | permMax=0.633  1274s
+  [ 7/32] S03 place best=0.725 ('raw', 'full', 'riem') | permMax=0.600  1322s
+  [ 8/32] S08 place best=0.624 ('csd', 'late', 'riem') | permMax=0.591  1352s
+  [ 9/32] S09 place best=0.696 ('csd', 'late', 'riem') | permMax=0.637  1425s
+  [10/32] S10 place best=0.662 ('csd', 'full', 'riem') | permMax=0.600  1442s
+  [11/32] S02 place best=0.683 ('csd', 'late', 'riem') | permMax=0.600  1492s
+  [12/32] S14 place best=0.550 ('car', 'late', 'proto') | permMax=0.537  1525s
+  [13/32] S07 place best=0.872 ('csd', 'late', 'riem') | permMax=0.557  1640s
+  [14/32] S06 place best=0.658 ('csd', 'late', 'riem') | permMax=0.613  1668s
+  [15/32] S05 place best=0.604 ('csd', 'full', 'riem') | permMax=0.575  1826s
+  [16/32] S15 place best=0.658 ('car', 'full', 'riem') | permMax=0.550  1850s
+  [17/32] S03 ph11  best=0.344 ('csd', 'late', 'riem') | permMax=0.100  3328s
+  [18/32] S07 ph11  best=0.320 ('csd', 'full', 'riem') | permMax=0.124  3444s
+  [19/32] S14 ph11  best=0.174 ('csd', 'full', 'proto') | permMax=0.118  3468s
+  [20/32] S09 ph11  best=0.391 ('car', 'late', 'riem') | permMax=0.105  3642s
+  [21/32] S01 ph11  best=0.300 ('raw', 'late', 'riem') | permMax=0.127  3802s
+  [22/32] S13 ph11  best=0.152 ('raw', 'full', 'riem') | permMax=0.115  3901s
+  [23/32] S11 ph11  best=0.379 ('csd', 'late', 'proto') | permMax=0.114  4704s
+  [24/32] S12 ph11  best=0.307 ('raw', 'late', 'riem') | permMax=0.094  5001s
+  [25/32] S02 ph11  best=0.253 ('raw', 'full', 'riem') | permMax=0.123  5236s
+  [26/32] S08 ph11  best=0.129 ('csd', 'late', 'riem') | permMax=0.100  5243s
+  [27/32] S04 ph11  best=0.311 ('car', 'full', 'riem') | permMax=0.100  5401s
+  [28/32] S10 ph11  best=0.145 ('raw', 'late', 'riem') | permMax=0.100  5597s
+  [29/32] S05 ph11  best=0.272 ('car', 'full', 'riem') | permMax=0.111  6204s
+  [30/32] S15 ph11  best=0.233 ('car', 'full', 'riem') | permMax=0.141  6327s
+  [31/32] S16 ph11  best=0.145 ('car', 'full', 'riem') | permMax=0.164  6612s
+  [32/32] S06 ph11  best=0.120 ('raw', 'full', 'proto') | permMax=0.105  7088s
+
+=== place (chance 0.500, n=16) ===
+  config                 dim    acc
+  car    full  proto    1518   0.5680
+  car    full  riem     1260   0.6434
+  car    late  proto    1265   0.5763
+  car    late  riem     1050   0.6543
+  csd    full  proto    1518   0.5577
+  csd    full  riem     1260   0.6426
+  csd    late  proto    1265   0.5659
+  csd    late  riem     1050   0.6661
+  raw    full  proto    1518   0.5872
+  raw    full  riem     1260   0.6438
+  raw    late  proto    1265   0.5830
+  raw    late  riem     1050   0.6493
+  permutation ceiling (max over configs): 0.5799
+  BEST ('csd', 'late', 'riem') = 0.6661   selection-corrected 0.5862   (15/16 above chance)
+    full  riem   csd-car: -0.0008 [-0.0255,+0.0239] p=0.9480
+    full  riem   car-raw: -0.0004 [-0.0166,+0.0159] p=0.9630
+    full  riem   csd-raw: -0.0011 [-0.0228,+0.0206] p=0.9132
+    full  proto  csd-car: -0.0103 [-0.0339,+0.0133] p=0.3667
+    full  proto  car-raw: -0.0191 [-0.0406,+0.0024] p=0.0778
+    full  proto  csd-raw: -0.0294 [-0.0568,-0.0021] p=0.0368
+    late  riem   csd-car: +0.0118 [-0.0125,+0.0361] p=0.3174
+    late  riem   car-raw: +0.0050 [-0.0087,+0.0187] p=0.4515
+    late  riem   csd-raw: +0.0168 [-0.0079,+0.0415] p=0.1679
+    late  proto  csd-car: -0.0104 [-0.0359,+0.0151] p=0.3973
+    late  proto  car-raw: -0.0066 [-0.0275,+0.0142] p=0.5073
+    late  proto  csd-raw: -0.0171 [-0.0428,+0.0087] p=0.1783
+
+=== ph11 (chance 0.091, n=16) ===
+  config                 dim    acc
+  car    full  proto    1518   0.1264
+  car    full  riem     1260   0.2239
+  car    late  proto    1265   0.1273
+  car    late  riem     1050   0.2227
+  csd    full  proto    1518   0.1708
+  csd    full  riem     1260   0.2115
+  csd    late  proto    1265   0.1591
+  csd    late  riem     1050   0.2191
+  raw    full  proto    1518   0.1218
+  raw    full  riem     1260   0.2226
+  raw    late  proto    1265   0.1204
+  raw    late  riem     1050   0.2223
+  permutation ceiling (max over configs): 0.1150
+  BEST ('car', 'full', 'riem') = 0.2239   selection-corrected 0.1998   (16/16 above chance)
+    full  riem   csd-car: -0.0124 [-0.0257,+0.0009] p=0.0654
+    full  riem   car-raw: +0.0013 [-0.0054,+0.0081] p=0.6810
+    full  riem   csd-raw: -0.0111 [-0.0248,+0.0027] p=0.1063
+    full  proto  csd-car: +0.0444 [+0.0048,+0.0841] p=0.0303
+    full  proto  car-raw: +0.0046 [-0.0125,+0.0217] p=0.5763
+    full  proto  csd-raw: +0.0490 [+0.0030,+0.0950] p=0.0383
+    late  riem   csd-car: -0.0036 [-0.0159,+0.0087] p=0.5413
+    late  riem   car-raw: +0.0004 [-0.0063,+0.0071] p=0.8980
+    late  riem   csd-raw: -0.0032 [-0.0170,+0.0106] p=0.6302
+    late  proto  csd-car: +0.0318 [-0.0073,+0.0710] p=0.1036
+    late  proto  car-raw: +0.0069 [-0.0095,+0.0232] p=0.3838
+    late  proto  csd-raw: +0.0387 [-0.0047,+0.0821] p=0.0766

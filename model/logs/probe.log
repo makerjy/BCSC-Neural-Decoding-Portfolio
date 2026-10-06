@@ -1,0 +1,18 @@
+PROBE | real: ['S06', 'S07', 'S11', 'S12'] | permutation control on S11 x5
+
+  REAL S12  r11=0.117  r12=0.089  r21=0.109  r22=0.074  C11=0.245  C12=0.209  C21=0.198  C22=0.127
+  REAL S07  r11=0.159  r12=0.182  r21=0.156  r22=0.155  C11=0.364  C12=0.339  C21=0.317  C22=0.329
+  PERM S11 seed=102  max=0.114  mean=0.089
+  PERM S11 seed=100  max=0.136  mean=0.090
+  PERM S11 seed=104  max=0.095  mean=0.083
+  REAL S11  r11=0.095  r12=0.109  r21=0.095  r22=0.095  C11=0.395  C12=0.414  C21=0.395  C22=0.364
+  PERM S11 seed=101  max=0.095  mean=0.075
+  PERM S11 seed=103  max=0.141  mean=0.098
+  REAL S06  r11=0.118  r12=0.100  r21=0.073  r22=0.091  C11=0.086  C12=0.105  C21=0.114  C22=0.100
+
+=== permutation control (S11, labels shuffled, chance=0.0909) ===
+  max-over-configs : mean 0.1164   range 0.095-0.141
+  mean-over-configs: mean 0.0872
+
+=== real S11 vs its own permutation ceiling ===
+  real best 0.4136 ((True, 1, 2))   perm best 0.1164   gap +0.2973
